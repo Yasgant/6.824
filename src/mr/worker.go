@@ -1,10 +1,14 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,17 +28,47 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
+	//fmt.Println("Here")
+	//CallExample()
+	tmp := 1
+	for {
+		t := Task{}
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+		call("Coordinator.AskForTask", tmp, &t)
+
+		if t.TaskType == "" {
+			//fmt.Printf("Finshed!\n")
+			break
+		}
+
+		if t.TaskType == "MAP" {
+			filename := t.MapFilename
+			//fmt.Println("here", filename)
+			file, err := os.Open(filename)
+			if err != nil {
+				log.Fatalf("cannot open %v", filename)
+			}
+			content, err := ioutil.ReadAll(file)
+			if err != nil {
+				log.Fatalf("cannot read %v", filename)
+			}
+			file.Close()
+			kva := PairWithArray{filename, mapf(filename, string(content))}
+			call("Coordinator.ReceiveMap", &kva, &tmp)
+		} else if t.TaskType == "REDUCE" {
+			answer := reducef(t.MapFilename, t.ReducePairs)
+			kva := PairWithString{t.MapFilename, KeyValue{t.MapFilename, answer}}
+			call("Coordinator.ReceiveReduce", &kva, &tmp)
+		} else if t.TaskType == "WAIT" {
+			time.Sleep(time.Second)
+		}
+	}
 
 }
 
@@ -77,6 +111,7 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	sockname := coordinatorSock()
 	c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
+
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
